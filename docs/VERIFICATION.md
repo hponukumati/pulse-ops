@@ -21,7 +21,7 @@ Local run on 2026-10-18 (Apple M3, Docker Desktop 29.6.2). Statuses: **PASS** (c
 | Container scan | trivy 0.76.0, HIGH/CRITICAL with fixes, on built images | `trivy image …` | PASS after hardening (pip removed, `apk upgrade`, gosu removed); postgres base image exception documented |
 | Workflow lint | actionlint | `docker run rhysd/actionlint` | PASS |
 | Benchmark | PRD §12 workload | `uv run scripts/benchmark.py` | PASS (see BENCHMARK.md) |
-| GitHub Actions on GitHub | CI/security workflows | — | **NOT RUN** (no remote; nothing pushed) |
+| GitHub Actions on GitHub | CI workflow, first run on commit `85324d3` | push to `main` | **FAIL** — backend and frontend PASS; e2e: smoke, Playwright, reliability drills PASS, backup drill FAIL (key files unreadable by the container user on Linux; image scan skipped). Fixed (see below); re-run pending the next push |
 | Hosted deployment | HTTPS/WSS, certificates, hosted config on a server | — | **NOT RUN** (config validation tested only) |
 | Demo video | — | — | **NOT RUN** (Playwright spec is the scripted walkthrough) |
 
@@ -34,6 +34,8 @@ Duplicate dialog IDs (a11y), WebSocket buffer accounting on unsubscribe, swallow
 After the last change (ingest lock order): backend 307 passed; images rebuilt; trivy clean on all three built images; clean setup → smoke 14/14, Playwright 5/5, reliability drill 11/11, backup drill 2/2 (restore-check 11/11), health report OK, artifact scan clean (`artifacts/final-verification-3.log`, 2026-10-18 09:03–09:12 UTC).
 
 Added afterwards (no application code changed): the example emitter `examples/fastapi-emitter` with 8 unit tests and 1 integration test (its batches stored by the real ingest endpoint); a negative control removing its method filter failed the unit test as expected. Re-run: backend 316 passed, ruff/format (now including `examples/`), mypy and actionlint clean, and the README `uv run` command started the example and served requests. The stack-level checks above were not re-run for this addition.
+
+First GitHub CI run ([run 39188133324](https://github.com/hponukumati/pulse-ops/actions/runs/39188133324)): the backup drill failed on the Linux runner because `backup-keygen.sh` created the public recipient file 0600 for the runner user, while the backup container runs as `postgres` (Docker Desktop on macOS does not enforce bind-mount ownership, so local runs passed). Reproduced on a Linux filesystem with the backup image, including the same failure for the private identity in `restore-check.sh`. Fix: the recipient (public) is made 0644; the decrypt container runs as the identity's owner (`--user $(id -u):$(id -g)`), so the identity stays 0600. Local re-run: keygen permissions checked (recipient 0644, identity 0600, directory 0700); backup drill 2/2 with restore-check 11/11. Confirmation on Linux needs the next CI run.
 
 ## Known limitations
 

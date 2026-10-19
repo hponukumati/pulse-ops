@@ -42,7 +42,8 @@ SQL
 
 R0=$(date +%s)
 docker compose --profile tools build -q backup-tools >/dev/null
-docker compose --profile tools run --rm -T --no-deps -v "$IDENTITY:/keys/identity.txt:ro" backup-tools age -d -i /keys/identity.txt < "$FILE" \
+# Run as the identity's owner so the private key can stay 0600 (Linux enforces ownership on bind mounts).
+docker compose --profile tools run --rm -T --no-deps --user "$(id -u):$(id -g)" -v "$IDENTITY:/keys/identity.txt:ro" backup-tools age -d -i /keys/identity.txt < "$FILE" \
   | docker exec -i "$DB" pg_restore -U postgres -d pulseops --exit-on-error --single-transaction
 RESTORE_S=$(($(date +%s) - R0))
 ok "decrypted and restored in ${RESTORE_S}s"
