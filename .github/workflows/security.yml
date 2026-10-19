@@ -1,0 +1,70 @@
+# Secret scanning, dependency advisories and container scanning; also weekly with fresh
+# advisory data. Known high/critical exploitable findings block; documented exceptions are
+# listed in SECURITY.md with rationale.
+name: Security
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (full history)
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 git /repo --redact --no-banner --exit-code 1
+
+  python-dependencies:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.8.21"
+      - name: pip-audit (runtime and dev lockfile)
+        working-directory: backend
+        run: |
+          uv export --frozen --all-groups --no-emit-project --format requirements-txt > "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit==2.9.0 --strict --disable-pip -r "$RUNNER_TEMP/requirements.txt"
+
+  npm-dependencies:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.0"
+      - name: Production dependencies (blocking)
+        run: npm audit --omit=dev --audit-level=high
+      - name: All dependencies (report; dev-only exceptions documented in SECURITY.md)
+        run: npm audit --audit-level=high || echo "::warning::dev-dependency advisories present; see SECURITY.md exceptions"
+
+  containers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -t pulseops-backend:scan backend && docker build -t pulseops-frontend:scan frontend
+      - name: trivy image scan (HIGH/CRITICAL with a fix available)
+        run: |
+          for image in pulseops-backend:scan pulseops-frontend:scan; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.0 image \
+              --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$image"
+          done

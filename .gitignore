@@ -1,0 +1,29 @@
+# Secrets and local credentials — never commit
+infra/secrets/
+.demo-credentials.json
+*.age
+*.key
+*.pem
+backups/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+
+# Tooling output
+artifacts/
+*.log
+.DS_Store
+infra/backup-keys/

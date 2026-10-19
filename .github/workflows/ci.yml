@@ -1,0 +1,121 @@
+# Tests, type checks, schema/codegen drift and the end-to-end walkthrough.
+# No repository secrets are used; pull_request (not pull_request_target) keeps untrusted
+# code away from any credentials. Third-party actions are pinned to commit SHAs.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.8.21"
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests migrations ../examples --config pyproject.toml
+      - run: uv run ruff format --check src tests migrations ../examples --config pyproject.toml
+      - run: uv run mypy
+      - run: uv run pytest tests/unit -q --junitxml=../reports/backend-unit.xml
+      - name: Integration tests (PostgreSQL + Redis via testcontainers)
+        run: uv run pytest tests/integration -q --junitxml=../reports/backend-integration.xml
+      - name: Exported GraphQL schema is current
+        run: uv run pulseops-admin export-schema --output ../docs/schema.graphql && git diff --exit-code ../docs/schema.graphql
+      - name: Test reports contain no credentials
+        if: always()
+        run: ../scripts/scan-artifacts.sh ../reports
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: backend-reports
+          path: reports/*.xml
+          retention-days: 7
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Frontend operations validate against docs/schema.graphql (generated code is current)
+        run: npm run codegen:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate throwaway secrets and start the stack (local demo mode, synthetic data)
+        run: ./scripts/gen-secrets.sh && ./scripts/demo-up.sh
+      - name: Unsafe hosted configuration is rejected
+        run: |
+          set +e
+          docker compose run --rm --no-deps -e PULSEOPS_ENV=hosted api python -c "from pulseops.config import get_settings, validate_for_startup; validate_for_startup(get_settings())"
+          test $? -ne 0
+      - name: Only the frontend publishes a port (127.0.0.1)
+        run: |
+          test "$(docker compose ps --format '{{.Publishers}}' postgres redis api worker | grep -c 'PublishedPort:[1-9]')" -eq 0
+          docker compose ps --format '{{.Publishers}}' frontend | grep -q '127.0.0.1'
+      - run: ./scripts/smoke.sh
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Playwright walkthrough (traces/screenshots/video disabled)
+        working-directory: frontend
+        run: npm ci && npx playwright install --with-deps chromium && npx playwright test
+      - name: Reliability drills (Redis outage, two workers + SIGKILL, restart persistence)
+        run: ./scripts/drill-reliability.sh
+      - name: Backup/restore drill (isolated restore, deletion replay, stale-grant review)
+        env:
+          PULSEOPS_BACKUP_KEY_DIR: ${{ runner.temp }}/backup-keys
+          PULSEOPS_BACKUP_IDENTITY_FILE: ${{ runner.temp }}/backup-keys/identity.txt
+        run: ./scripts/drill-backup.sh
+      - name: Logs and test output contain no credentials or canaries
+        if: always()
+        run: |
+          docker compose logs --no-color > "$RUNNER_TEMP/compose.log" 2>&1 || true
+          ./scripts/scan-artifacts.sh "$RUNNER_TEMP/compose.log" frontend/test-results
+      - name: Container scan of the images that were just tested
+        run: |
+          for image in pulseops-backend:local pulseops-frontend:local; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.0 image \
+              --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$image"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: e2e-junit
+          path: frontend/test-results/e2e-junit.xml
+          retention-days: 7

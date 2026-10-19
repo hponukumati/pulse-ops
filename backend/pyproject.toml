@@ -1,0 +1,69 @@
+[project]
+name = "pulseops"
+version = "0.1.0"
+description = "PulseOps API observability backend"
+authors = [
+    { name = "Sri Harsha Ponukumati", email = "hponukumati@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.20.0",
+    "asyncpg>=0.32.0",
+    "fastapi>=0.143.3",
+    "pwdlib[argon2]>=0.3.1",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.0",
+    "pyjwt[crypto]>=2.15.1",
+    "redis>=8.1.0",
+    "sqlalchemy[asyncio]>=2.1.5",
+    "strawberry-graphql>=0.336.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+pulseops-admin = "pulseops.cli:main"
+pulseops-worker = "pulseops.workers.main:cli"
+
+[build-system]
+requires = ["uv_build>=0.8.21,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.17.1",
+    "testcontainers[postgres,redis]>=4.15.0",
+]
+
+[tool.ruff]
+line-length = 140
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF"]
+ignore = ["S101", "S311", "RUF012", "B008", "S608", "E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B", "ASYNC"]
+"migrations/**" = ["S608"]
+
+[tool.mypy]
+python_version = "3.13"
+packages = ["pulseops"]
+strict = false
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+timeout = 120
+markers = ["integration: requires Docker (PostgreSQL/Redis testcontainers)"]

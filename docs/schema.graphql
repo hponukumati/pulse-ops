@@ -1,0 +1,377 @@
+enum AlertMetric {
+  ERROR_RATE_5XX
+  P95_LATENCY_MS
+  REQUEST_RATE
+}
+
+type AlertRule {
+  id: ID!
+  serviceId: ID!
+  name: String!
+  metric: AlertMetric!
+  comparator: Comparator!
+  threshold: Float!
+  windowMinutes: Int!
+  minSamples: Int!
+  enabled: Boolean!
+  version: Int!
+  breachStreak: Int!
+  okStreak: Int!
+  lastStatus: String
+  lastValue: Float
+  lastSamples: Int
+  lastEvaluatedSlot: DateTime
+  deleted: Boolean!
+}
+
+type AlertRuleConnection {
+  edges: [AlertRuleEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type AlertRuleEdge {
+  cursor: String!
+  node: AlertRule!
+}
+
+input AlertRuleInput {
+  name: String!
+  metric: AlertMetric!
+  comparator: Comparator!
+  threshold: Float!
+  windowMinutes: Int!
+  minSamples: Int! = 20
+  enabled: Boolean! = true
+}
+
+type AuditEvent {
+  id: ID!
+  occurredAt: DateTime!
+  actorKind: String!
+  actorId: ID
+  action: String!
+  targetType: String
+  targetId: ID
+  result: String!
+  requestId: ID
+}
+
+type AuditEventConnection {
+  edges: [AuditEventEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type AuditEventEdge {
+  cursor: String!
+  node: AuditEvent!
+}
+
+enum Comparator {
+  GT
+  GTE
+}
+
+"""Date with time (isoformat)"""
+scalar DateTime
+
+type Diagnostics {
+  databaseOk: Boolean!
+  redisOk: Boolean!
+  lastWorkerHeartbeatAt: DateTime
+  evaluationsPaused: Boolean!
+  pausedReason: String
+  outboxPending: Int!
+  outboxOldestPendingAt: DateTime
+  lastDispatchOkAt: DateTime
+  lastDispatchErrorAt: DateTime
+  deletionJobsPending: Int!
+  retainedEvents: Int!
+  retainedEventLimit: Int!
+  eventRetentionDays: Int!
+}
+
+type EndpointStat {
+  routeId: ID!
+  template: String!
+  method: String!
+  requests: Int!
+  errorRate5xx: Float!
+  clientErrorRate4xx: Float!
+  p95Ms: Float
+}
+
+type EndpointStatConnection {
+  edges: [EndpointStatEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type EndpointStatEdge {
+  cursor: String!
+  node: EndpointStat!
+}
+
+type Incident {
+  id: ID!
+  serviceId: ID!
+  ruleId: ID!
+  status: String!
+  version: Int!
+  metric: AlertMetric!
+  threshold: Float!
+  openedValue: Float
+  openedAt: DateTime!
+  acknowledgedAt: DateTime
+  resolvedAt: DateTime
+  resolveReason: String
+  service: Service
+  rule: AlertRule
+  transitions: [IncidentTransition!]!
+}
+
+type IncidentChange {
+  eventId: ID!
+  version: Int!
+  incident: Incident!
+}
+
+type IncidentConnection {
+  edges: [IncidentEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type IncidentEdge {
+  cursor: String!
+  node: Incident!
+}
+
+type IncidentTransition {
+  version: Int!
+  kind: String!
+  reason: String
+  actorId: ID
+  occurredAt: DateTime!
+}
+
+type IngestToken {
+  id: ID!
+  serviceId: ID!
+  publicId: String!
+  createdAt: DateTime!
+  expiresAt: DateTime!
+  revokedAt: DateTime
+}
+
+type IssuedIngestToken {
+  token: IngestToken!
+  secret: String!
+}
+
+type Me {
+  id: ID!
+  email: String!
+  role: Role!
+  serviceIds: [ID!]!
+  reauthenticatedUntil: DateTime
+}
+
+type Metrics {
+  serviceId: ID!
+  range: MetricsRange!
+  routeId: ID
+  asOf: DateTime!
+  windowStart: DateTime!
+  windowEnd: DateTime!
+  totalRequests: Int!
+  requestsPerMinute: Float!
+  errorRate5xx: Float!
+  clientErrorRate4xx: Float!
+  p50Ms: Float
+  p95Ms: Float
+  p99Ms: Float
+  lastEventAt: DateTime
+  sampleCount: Int!
+  status: String!
+  timeseries: [MetricsBucket!]!
+  topEndpoints: [EndpointStat!]!
+}
+
+type MetricsBucket {
+  start: DateTime!
+  end: DateTime!
+  durationSeconds: Float!
+  requests: Int!
+  requestsPerMinute: Float!
+  errorRate5xx: Float!
+  clientErrorRate4xx: Float!
+  p95Ms: Float
+}
+
+enum MetricsRange {
+  LAST_15M
+  LAST_1H
+  LAST_24H
+  LAST_7D
+}
+
+type Mutation {
+  createService(input: ServiceInput!): Service!
+  updateService(id: ID!, input: ServiceUpdateInput!): Service!
+  deleteService(id: ID!): Boolean!
+  registerRoute(serviceId: ID!, template: String!): Route!
+  retireRoute(id: ID!): Route!
+  createIngestToken(serviceId: ID!): IssuedIngestToken!
+  rotateIngestToken(id: ID!): IssuedIngestToken!
+  revokeIngestToken(id: ID!): IngestToken!
+  createAlertRule(serviceId: ID!, input: AlertRuleInput!): AlertRule!
+  updateAlertRule(id: ID!, input: AlertRuleInput!): AlertRule!
+  deleteAlertRule(id: ID!): AlertRule!
+  acknowledgeIncident(id: ID!): Incident!
+  resolveIncident(id: ID!): Incident!
+  setUserRole(userId: ID!, role: Role!): User!
+  setUserDisabled(userId: ID!, disabled: Boolean!): User!
+  grantServiceAccess(userId: ID!, serviceId: ID!): ServiceGrant!
+  revokeServiceAccess(userId: ID!, serviceId: ID!): Boolean!
+  setEventRetentionDays(days: Int!): Int!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
+type Query {
+  me: Me!
+  services(first: Int = null, after: String = null): ServiceConnection!
+  service(id: ID!): Service!
+  routes(serviceId: ID!, first: Int = null, after: String = null, includeRetired: Boolean! = false): RouteConnection!
+  alertRules(serviceId: ID!, first: Int = null, after: String = null): AlertRuleConnection!
+  incidents(serviceId: ID!, first: Int = null, after: String = null, activeOnly: Boolean! = false): IncidentConnection!
+  incident(id: ID!): Incident!
+  endpoints(serviceId: ID!, range: MetricsRange!, first: Int = null, after: String = null): EndpointStatConnection!
+  metrics(serviceId: ID!, range: MetricsRange!, routeId: ID = null): Metrics!
+  systemStatus: SystemStatus!
+  users(first: Int = null, after: String = null): UserConnection!
+  serviceGrants(userId: ID = null, serviceId: ID = null, first: Int = null, after: String = null): ServiceGrantConnection!
+  auditEvents(first: Int = null, after: String = null): AuditEventConnection!
+  diagnostics: Diagnostics!
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+type Route {
+  id: ID!
+  serviceId: ID!
+  template: String!
+  createdAt: DateTime!
+  retiredAt: DateTime
+}
+
+type RouteConnection {
+  edges: [RouteEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RouteEdge {
+  cursor: String!
+  node: Route!
+}
+
+type Service {
+  id: ID!
+  name: String!
+  environment: String!
+  createdAt: DateTime!
+  health: ServiceHealth
+  canManage: Boolean!
+  routes(first: Int = null, after: String = null, includeRetired: Boolean! = false): RouteConnection!
+  alertRules(first: Int = null, after: String = null): AlertRuleConnection!
+  incidents(first: Int = null, after: String = null, activeOnly: Boolean! = false): IncidentConnection!
+  ingestTokens: [IngestToken!]!
+  metrics(range: MetricsRange!, routeId: ID = null): Metrics!
+}
+
+type ServiceConnection {
+  edges: [ServiceEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ServiceEdge {
+  cursor: String!
+  node: Service!
+}
+
+type ServiceGrant {
+  userId: ID!
+  serviceId: ID!
+  createdAt: DateTime!
+  service: Service
+}
+
+type ServiceGrantConnection {
+  edges: [ServiceGrantEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ServiceGrantEdge {
+  cursor: String!
+  node: ServiceGrant!
+}
+
+type ServiceHealth {
+  status: String!
+  sampleCount15m: Int!
+  lastEventAt: DateTime
+  activeIncidents: Int!
+  telemetryStale: Boolean!
+  evaluationStale: Boolean!
+}
+
+input ServiceInput {
+  name: String!
+  environment: String!
+}
+
+input ServiceUpdateInput {
+  name: String = null
+  environment: String = null
+}
+
+type Subscription {
+  incidentChanged(serviceId: ID!): IncidentChange!
+}
+
+type SystemStatus {
+  evaluationStale: Boolean!
+  evaluationsPaused: Boolean!
+  lastWorkerHeartbeatAt: DateTime
+}
+
+type User {
+  id: ID!
+  email: String!
+  role: Role!
+  disabled: Boolean!
+  createdAt: DateTime!
+}
+
+type UserConnection {
+  edges: [UserEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type UserEdge {
+  cursor: String!
+  node: User!
+}

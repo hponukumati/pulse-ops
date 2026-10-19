@@ -1,0 +1,182 @@
+# PulseOps local stack: frontend (nginx edge + built SPA), API, worker, PostgreSQL, Redis.
+#   ./scripts/gen-secrets.sh && docker compose up --build -d
+# Only the frontend publishes a port, bound to 127.0.0.1. DB/Redis have no host ports.
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+x-app-env: &app-env
+  PULSEOPS_ENV: local
+  PULSEOPS_DEMO_MODE: ${PULSEOPS_DEMO_MODE:-false}
+  PULSEOPS_ALLOWED_ORIGINS: '["http://127.0.0.1:8080","http://localhost:8080"]'
+  PULSEOPS_TRUSTED_PROXIES: '["172.30.10.10"]'
+  PULSEOPS_DB_HOST: postgres
+  PULSEOPS_REDIS_HOST: redis
+  PULSEOPS_DB_PASSWORD_FILE: /run/secrets/db_app_password
+  PULSEOPS_DB_MAINT_PASSWORD_FILE: /run/secrets/db_maint_password
+  PULSEOPS_REDIS_PASSWORD_FILE: /run/secrets/redis_password
+  PULSEOPS_JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
+  PULSEOPS_REFRESH_HMAC_KEY_FILE: /run/secrets/refresh_hmac_key
+  PULSEOPS_RATE_LIMIT_KEY_FILE: /run/secrets/rate_limit_key
+  PULSEOPS_INGEST_HMAC_KEYS_FILE: /run/secrets/ingest_hmac_keys
+
+x-app-secrets: &app-secrets
+  - db_app_password
+  - db_maint_password
+  - redis_password
+  - jwt_private_key
+  - refresh_hmac_key
+  - rate_limit_key
+  - ingest_hmac_keys
+
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_superuser_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    secrets: [postgres_superuser_password, db_migrator_password, db_app_password, db_maint_password]
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pulseops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    shm_size: 128m
+    mem_limit: 1g
+    cpus: 2
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.10.2-alpine
+    # Disposable: no persistence. ACL file disables the default user.
+    command: ["redis-server", "--aclfile", "/run/secrets/redis_users.acl", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    secrets: [redis_users.acl, redis_password]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli --no-auth-warning --user pulseops ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    cpus: 1
+    <<: *hardening
+    restart: unless-stopped
+
+  migrate:
+    build: ./backend
+    image: pulseops-backend:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *app-env
+      PULSEOPS_DB_MIGRATOR_PASSWORD_FILE: /run/secrets/db_migrator_password
+    secrets: [db_migrator_password, db_app_password, db_maint_password]
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+    <<: *hardening
+    restart: "no"
+
+  api:
+    image: pulseops-backend:local
+    environment: *app-env
+    secrets: *app-secrets
+    networks:
+      backend: {}
+      edge: { ipv4_address: 172.30.10.20 }
+    tmpfs: ["/tmp:size=16m"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2).status == 200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 768m
+    cpus: 2
+    <<: *hardening
+    restart: unless-stopped
+
+  worker:
+    image: pulseops-backend:local
+    command: ["pulseops-worker"]
+    environment: *app-env
+    secrets: *app-secrets
+    volumes:
+      - ledger:/var/lib/pulseops/ledger
+    networks: [backend]
+    tmpfs: ["/tmp:size=16m"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    stop_grace_period: 20s
+    mem_limit: 512m
+    cpus: 1
+    <<: *hardening
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    image: pulseops-frontend:local
+    ports: ["127.0.0.1:8080:8080"]
+    networks:
+      edge: { ipv4_address: 172.30.10.10 }
+    tmpfs: ["/tmp:size=32m"]
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 128m
+    cpus: 1
+    <<: *hardening
+    restart: unless-stopped
+
+  # On-demand tooling (not started by `up`): encrypted backups and isolated restore checks.
+  backup-tools:
+    build: ./infra/backup
+    image: pulseops-backup-tools:local
+    profiles: ["tools"]
+    networks: [backend]
+    secrets: [db_migrator_password]
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  backend:
+    internal: true
+  edge:
+    ipam:
+      config:
+        - subnet: 172.30.10.0/24
+
+volumes:
+  pgdata:
+  ledger:
+
+secrets:
+  postgres_superuser_password: { file: ./infra/secrets/postgres_superuser_password }
+  db_migrator_password: { file: ./infra/secrets/db_migrator_password }
+  db_app_password: { file: ./infra/secrets/db_app_password }
+  db_maint_password: { file: ./infra/secrets/db_maint_password }
+  redis_password: { file: ./infra/secrets/redis_password }
+  redis_users.acl: { file: ./infra/secrets/redis_users.acl }
+  jwt_private_key: { file: ./infra/secrets/jwt_private_key.pem }
+  refresh_hmac_key: { file: ./infra/secrets/refresh_hmac_key }
+  rate_limit_key: { file: ./infra/secrets/rate_limit_key }
+  ingest_hmac_keys: { file: ./infra/secrets/ingest_hmac_keys.json }
