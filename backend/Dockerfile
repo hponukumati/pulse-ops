@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Backend image (API, worker, migrations and admin CLI share one codebase/image).
 
-FROM python:3.13.16-slim AS build
+FROM python:3.14.8-slim AS build
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/opt/venv
 RUN pip install uv==0.8.21
 WORKDIR /src
@@ -10,7 +10,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
-FROM python:3.13.16-slim AS runtime
+FROM python:3.14.8-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH=/opt/venv/bin:$PATH
 # pip/ensurepip are not needed at runtime (and vendor their own urllib3/msgpack copies).
 RUN rm -rf /usr/local/lib/python3.13/site-packages/pip /usr/local/lib/python3.13/site-packages/pip-*.dist-info \
