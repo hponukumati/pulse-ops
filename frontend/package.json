@@ -13,7 +13,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@apollo/client": "4.3.4",
+    "@apollo/client": "4.3.5",
     "graphql": "16.14.2",
     "graphql-ws": "6.4.1",
     "react": "19.3.1",
